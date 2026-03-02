@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Debian 13 (Trixie) local LLM setup helper:
 # - NVIDIA driver + CUDA toolkit (Debian packages)
-# - Ollama (systemd) bound to localhost by default
+# - Ollama (systemd) exposed on all interfaces by default
 # - Open WebUI (systemd) installed WITHOUT Docker
 # - Python 3.12 via uv (user-space), venv seeded with pip
 # - Downloads a curated set of models BY DEFAULT (opt-out supported)
@@ -29,7 +29,7 @@ set -Eeuo pipefail
 ########################################
 : "${LOG_FILE:=/var/log/ollama-openwebui-setup.log}"
 
-: "${OLLAMA_BIND:=127.0.0.1}"
+: "${OLLAMA_BIND:=0.0.0.0}"
 : "${OLLAMA_PORT:=11434}"
 : "${OLLAMA_KEEP_ALIVE:=24h}"
 
@@ -42,6 +42,7 @@ set -Eeuo pipefail
 # Firewall controls
 : "${UFW_ENABLE:=0}"        # 0 = don't enable; 1 = enable ufw
 : "${UFW_ALLOW_WEBUI:=1}"   # 1 = add allow rule for WEBUI_PORT
+: "${UFW_ALLOW_OLLAMA:=1}"  # 1 = add allow rule for OLLAMA_PORT
 : "${SSH_ALLOW:=1}"         # 1 = ALWAYS allow SSH before enabling ufw
 : "${SSH_PORT:=}"           # Optional: set if SSH runs on a non-standard port
 
@@ -150,7 +151,7 @@ fi
 log "==> Starting setup"
 log "==> Config: OLLAMA=${OLLAMA_BIND}:${OLLAMA_PORT}, WEBUI=${WEBUI_BIND}:${WEBUI_PORT}"
 log "==> Models: PULL_MODELS=${PULL_MODELS} (SKIP_MODEL_PULLS=${SKIP_MODEL_PULLS}), MODEL_LIST='${MODEL_LIST}'"
-log "==> Firewall: UFW_ENABLE=${UFW_ENABLE}, SSH_ALLOW=${SSH_ALLOW}, SSH_PORT=${SSH_PORT:-"(auto/OpenSSH)"}"
+log "==> Firewall: UFW_ENABLE=${UFW_ENABLE}, UFW_ALLOW_WEBUI=${UFW_ALLOW_WEBUI}, UFW_ALLOW_OLLAMA=${UFW_ALLOW_OLLAMA}, SSH_ALLOW=${SSH_ALLOW}, SSH_PORT=${SSH_PORT:-"(auto/OpenSSH)"}"
 log "==> Paths: OPT=${OPENWEBUI_OPT_DIR}, DATA=${OPENWEBUI_DATA_DIR}"
 log "==> Log: $LOG_FILE"
 if (( DRY_RUN )); then log "==> DRY-RUN enabled: commands will not execute."; fi
@@ -409,7 +410,7 @@ fi
 # Step 10: Firewall (SSH-safe)
 ########################################
 log "==> 10) Firewall (SSH-safe)"
-if (( UFW_ALLOW_WEBUI || UFW_ENABLE )); then
+if (( UFW_ALLOW_WEBUI || UFW_ALLOW_OLLAMA || UFW_ENABLE )); then
   if ! command -v ufw >/dev/null 2>&1; then
     run bash -lc 'DEBIAN_FRONTEND=noninteractive apt install -y ufw' || die "$E_APT" "Failed installing ufw"
   else
@@ -431,6 +432,11 @@ if (( UFW_ALLOW_WEBUI || UFW_ENABLE )); then
     run ufw allow "${WEBUI_PORT}/tcp" || die "$E_UFW" "Failed to allow WebUI port ${WEBUI_PORT}/tcp in UFW"
   fi
 
+  # Allow Ollama API port
+  if (( UFW_ALLOW_OLLAMA )); then
+    run ufw allow "${OLLAMA_PORT}/tcp" || die "$E_UFW" "Failed to allow Ollama port ${OLLAMA_PORT}/tcp in UFW"
+  fi
+
   # Enable firewall if requested
   if (( UFW_ENABLE )); then
     if (( SSH_ALLOW )) && ! ufw status | grep -Eq 'OpenSSH|(^|\s)22/tcp|'"${SSH_PORT:-}"'/tcp'; then
@@ -443,7 +449,7 @@ if (( UFW_ALLOW_WEBUI || UFW_ENABLE )); then
 
   run ufw status verbose || true
 else
-  log "Firewall step skipped (UFW_ALLOW_WEBUI=0 and UFW_ENABLE=0)."
+  log "Firewall step skipped (UFW_ALLOW_WEBUI=0, UFW_ALLOW_OLLAMA=0, and UFW_ENABLE=0)."
 fi
 
 ########################################
